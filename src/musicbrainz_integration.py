@@ -114,6 +114,45 @@ class MusicBrainzIntegration:
         
         return result.strip()
     
+    def _extract_secondary_artists(self, artist_string: str, primary_artist: str) -> List[str]:
+        """
+        Extract secondary artists from multi-artist format string.
+        
+        Used as fallback if primary artist doesn't match well.
+        
+        Args:
+            artist_string: Original artist string (e.g., "Jay-Z & Linkin Park")
+            primary_artist: Already-extracted primary artist
+            
+        Returns:
+            List of secondary artist names
+        """
+        secondary = []
+        
+        # Try splitting on each delimiter
+        for delimiter in self.MULTI_ARTIST_DELIMITERS:
+            if delimiter.lower() in artist_string.lower():
+                # Find the split point (case-insensitive)
+                idx = artist_string.lower().find(delimiter.lower())
+                # Get everything after the delimiter
+                after_delim = artist_string[idx + len(delimiter):].strip()
+                
+                if after_delim and after_delim.lower() != primary_artist.lower():
+                    # Check if there are more delimiters in the remainder
+                    remaining = after_delim
+                    for d in self.MULTI_ARTIST_DELIMITERS:
+                        if d.lower() in remaining.lower():
+                            # Take up to the next delimiter
+                            next_idx = remaining.lower().find(d.lower())
+                            remaining = remaining[:next_idx].strip()
+                            break
+                    
+                    if remaining:
+                        secondary.append(remaining)
+                break
+        
+        return secondary
+    
     def resolve_artist(
         self,
         artist_name: str,
@@ -137,57 +176,26 @@ class MusicBrainzIntegration:
         try:
             # Parse multi-artist format
             primary_artist = self.parse_artist_string(artist_name)
+            secondary_artists = self._extract_secondary_artists(artist_name, primary_artist)
             
             logger.info(f"Resolving artist: {primary_artist}")
+            if secondary_artists:
+                logger.info(f"Secondary artists (fallback): {secondary_artists}")
             
-            # Search for artist on MusicBrainz
-            results = mb.search_artists(primary_artist, limit=5)
+            # Try to resolve primary artist
+            result = self._try_resolve(primary_artist, confidence_threshold)
+            if result:
+                return result
             
-            if not results.get("artist-list"):
-                logger.warning(f"No MusicBrainz match for: {primary_artist}")
-                return None
+            # Try secondary artists as fallback
+            for secondary_artist in secondary_artists:
+                logger.info(f"Trying secondary artist: {secondary_artist}")
+                result = self._try_resolve(secondary_artist, confidence_threshold)
+                if result:
+                    return result
             
-            # Find best match by name similarity
-            best_match = None
-            best_score = 0.0
-            
-            for artist in results["artist-list"]:
-                # Simple heuristic: exact match scores highest, partial match lower
-                canonical_name = artist.get("name", "")
-                score = self._calculate_match_score(primary_artist, canonical_name)
-                
-                logger.debug(f"  Candidate: {canonical_name} (score: {score:.2f})")
-                
-                if score > best_score:
-                    best_score = score
-                    best_match = artist
-            
-            if best_score < confidence_threshold:
-                logger.warning(
-                    f"Best match for {primary_artist} scored {best_score:.2f}, "
-                    f"below threshold {confidence_threshold}"
-                )
-                return None
-            
-            # Fetch full artist details including genres
-            musicbrainz_id = best_match["id"]
-            logger.info(f"Found MusicBrainz ID: {musicbrainz_id}")
-            
-            artist_detail = mb.get_artist_by_id(
-                musicbrainz_id,
-                includes=["tags"]
-            )
-            
-            artist_data = artist_detail["artist"]
-            
-            # Extract genres from tags (MusicBrainz uses tags instead of genres)
-            genres = self._extract_genres_from_tags(artist_data)
-            
-            return {
-                "musicbrainz_id": musicbrainz_id,
-                "canonical_name": artist_data.get("name", canonical_name),
-                "genres": genres,
-            }
+            logger.warning(f"No MusicBrainz match for: {artist_name}")
+            return None
         
         except mb.ResponseError as e:
             if "429" in str(e) or "rate limit" in str(e).lower():
@@ -199,6 +207,66 @@ class MusicBrainzIntegration:
         except Exception as e:
             logger.error(f"Unexpected error resolving artist: {e}")
             raise APIError(f"Unexpected error: {e}")
+    
+    def _try_resolve(self, artist_name: str, confidence_threshold: float) -> Optional[Dict]:
+        """
+        Try to resolve a single artist name.
+        
+        Args:
+            artist_name: Artist name to resolve
+            confidence_threshold: Minimum confidence threshold
+            
+        Returns:
+            Artist dict or None if no good match found
+        """
+        # Search for artist on MusicBrainz
+        results = mb.search_artists(artist_name, limit=5)
+        
+        if not results.get("artist-list"):
+            logger.debug(f"No results for: {artist_name}")
+            return None
+        
+        # Find best match by name similarity
+        best_match = None
+        best_score = 0.0
+        
+        for artist in results["artist-list"]:
+            # Simple heuristic: exact match scores highest, partial match lower
+            canonical_name = artist.get("name", "")
+            score = self._calculate_match_score(artist_name, canonical_name)
+            
+            logger.debug(f"  Candidate: {canonical_name} (score: {score:.2f})")
+            
+            if score > best_score:
+                best_score = score
+                best_match = artist
+        
+        if best_score < confidence_threshold:
+            logger.debug(
+                f"Best match for {artist_name} scored {best_score:.2f}, "
+                f"below threshold {confidence_threshold}"
+            )
+            return None
+        
+        # Fetch full artist details including genres
+        musicbrainz_id = best_match["id"]
+        logger.info(f"Found MusicBrainz ID: {musicbrainz_id}")
+        
+        artist_detail = mb.get_artist_by_id(
+            musicbrainz_id,
+            includes=["tags"]
+        )
+        
+        artist_data = artist_detail["artist"]
+        
+        # Extract genres from tags (MusicBrainz uses tags instead of genres)
+        genres = self._extract_genres_from_tags(artist_data)
+        
+        return {
+            "musicbrainz_id": musicbrainz_id,
+            "canonical_name": artist_data.get("name", canonical_name),
+            "genres": genres,
+        }
     
     def _calculate_match_score(self, query: str, candidate: str) -> float:
         """

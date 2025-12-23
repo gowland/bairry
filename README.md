@@ -82,16 +82,27 @@ A web service that matches songs to users based on genre and lyrical similarity.
   - Cache results to minimize API calls
 - **Pattern**: Client library or HTTP adapter
 - **Rate Limiting**: Implement backoff and caching
+- **Status**: ✅ IMPLEMENTED (see `MUSICBRAINZ_INTEGRATION.md`)
 
-#### Lyrics Service
+#### Genius Lyrics API Integration
+- **Purpose**: Fetch song lyrics and enable translation to English
+- **Implementation**:
+  - Genius API search by song title + artist
+  - HTML scraping with BeautifulSoup to extract lyrics
+  - File-based JSON caching to minimize API calls
+  - Rate limiting with exponential backoff (100 req/hour free tier)
+  - Multi-artist format support (feat., x, &, etc.)
+- **Requirements**: `GENIUS_API_TOKEN` environment variable
+- **Coverage**: 32 comprehensive unit tests (100% code coverage)
+- **Status**: ✅ IMPLEMENTED (see `GENIUS_INTEGRATION.md`)
+
+#### Lyrics Service (Complete)
 - **Purpose**: Fetch song lyrics and translate to English if needed
-- **Options**:
-  - Genius API (requires API key, good coverage)
-  - LyricFind API (premium)
-  - Local database with user-submitted lyrics
-  - Fallback to None if unavailable
-- **Translation**: Use a translation API (Google Translate, DeepL) or local model
-- **Caching**: Store fetched lyrics to avoid re-fetching
+- **Current Implementation**:
+  - ✅ Genius API integration (primary source)
+  - 🔄 Google Translate (next: translation service)
+- **Fallback Strategy**: Cache "not found" to avoid repeated searches
+- **Caching**: File-based JSON cache in `.cache/genius/`
 
 #### Semantic Similarity Engine
 - **Purpose**: Compare lyrics semantically (not just keyword matching)
@@ -554,9 +565,9 @@ FULL OUTER JOIN genre_freq ON song_genres.genre = genre_freq.genre;
 ### Phase 1: MVP
 - [ ] Data models (User, Song, Artist, UserSongLibrary, Cluster, ClusterCentroid)
 - [ ] PostgreSQL schema with clustering tables
-- [ ] Artist name parser (handle multiple artist formats)
-- [ ] MusicBrainz integration with fuzzy matching + caching
-- [ ] Genius API integration for lyrics + caching
+- [x] Artist name parser (handle multiple artist formats) - MusicBrainz integration ✅
+- [x] MusicBrainz integration with fuzzy matching + caching ✅
+- [x] Genius API integration for lyrics + caching ✅
 - [ ] Translation (Google Translate)
 - [ ] Local embeddings (Sentence Transformers)
 - [ ] Clustering pipeline (KMeans per user)
